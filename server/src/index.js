@@ -4,51 +4,51 @@ const express  = require('express');
 const cors     = require('cors');
 const helmet   = require('helmet');
 const morgan   = require('morgan');
-const { port, frontendUrl, nodeEnv } = require('./config');
-const { errorHandler, notFound }     = require('./middleware/errorHandler');
-const { apiLimiter }                 = require('./middleware/rateLimit');
+const { port, nodeEnv } = require('./config');
+const { errorHandler, notFound } = require('./middleware/errorHandler');
+const { testConnection }         = require('./config/database');
 
 const app = express();
+
+// Required for Render (proxy)
 app.set('trust proxy', 1);
 
-// ── Security ─────────────────────────────────────────────────────
+// Security
 app.use(helmet());
-app.use(cors({
-  origin: [frontendUrl, 'http://localhost:5173'],
-  credentials: true,
-}));
 
-// ── Parsing ───────────────────────────────────────────────────────
+// CORS — allow all origins (fixes frontend blocked issue)
+app.use(cors({ origin: '*' }));
+
+// Parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// ── Logging ───────────────────────────────────────────────────────
-if (nodeEnv !== 'test') app.use(morgan('dev'));
+// Logging
+app.use(morgan('dev'));
 
-// ── Rate Limiting ─────────────────────────────────────────────────
-app.use('/api', apiLimiter);
-
-// ── Health Check ──────────────────────────────────────────────────
+// Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'Sunday Chicken API', timestamp: new Date().toISOString() });
 });
 
-// ── API Routes ────────────────────────────────────────────────────
+// Routes
 app.use('/api/auth',       require('./routes/auth.routes'));
 app.use('/api/products',   require('./routes/product.routes'));
 app.use('/api/categories', require('./routes/category.routes'));
 app.use('/api/orders',     require('./routes/order.routes'));
 app.use('/api/admin',      require('./routes/admin.routes'));
 
-// ── Error Handling ────────────────────────────────────────────────
+// Errors
 app.use(notFound);
 app.use(errorHandler);
 
-// ── Start ─────────────────────────────────────────────────────────
-app.listen(port, () => {
-  console.log(`🐔 Sunday Chicken API running on port ${port} [${nodeEnv}]`);
-  console.log(`   Health: http://localhost:${port}/health`);
-  console.log(`   API:    http://localhost:${port}/api`);
-});
+// Start — test DB first then listen
+const start = async () => {
+  await testConnection();
+  app.listen(port, () => {
+    console.log(`🐔 Sunday Chicken API on port ${port} [${nodeEnv}]`);
+  });
+};
 
+start();
 module.exports = app;

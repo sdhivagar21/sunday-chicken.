@@ -1,19 +1,5 @@
-const rateLimit = require('express-rate-limit');
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10,
-  message: { success: false, message: 'Too many requests, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 100,
-  message: { success: false, message: 'Too many requests.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
+// Rate limiting disabled — causes issues on Render free tier
+const pass = (req, res, next) => next();
+const authLimiter = pass;
+const apiLimiter  = pass;
 module.exports = { authLimiter, apiLimiter };
