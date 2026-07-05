@@ -19,7 +19,7 @@ const pool = new Pool({
 pool.on('error', (err) => console.error('❌ Pool error:', err.message));
 
 const testConnection = async () => {
-  let tries = 3;
+  let tries = 5;
   while (tries > 0) {
     try {
       const client = await pool.connect();
@@ -29,9 +29,12 @@ const testConnection = async () => {
       return;
     } catch (err) {
       tries--;
-      console.error(`❌ DB attempt failed (${3-tries}/3):`, err.message);
-      if (tries === 0) { console.error('❌ Giving up.'); process.exit(1); }
-      await new Promise(r => setTimeout(r, 2000));
+      console.error(`❌ DB attempt failed (${5 - tries}/5):`, err.message);
+      if (tries === 0) {
+        console.error('❌ Could not connect to DB — server will start anyway');
+        return; // Don't exit — let server run, DB queries will fail gracefully
+      }
+      await new Promise(r => setTimeout(r, 3000));
     }
   }
 };
