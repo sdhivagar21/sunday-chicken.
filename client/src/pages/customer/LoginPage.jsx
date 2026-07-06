@@ -1,40 +1,39 @@
 import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Phone, Lock } from 'lucide-react';
-import { Input, Button } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
 import { APP_NAME } from '@/constants';
 import toast from 'react-hot-toast';
 
 export default function LoginPage() {
-  const { login } = useAuth();
-  const navigate  = useNavigate();
-  const location  = useLocation();
-  const from = location.state?.from?.pathname || '/';
+  const { login }  = useAuth();
+  const navigate   = useNavigate();
+  const location   = useLocation();
+  const from       = location.state?.from?.pathname || '/';
 
-  const [form, setForm]       = useState({ phone: '', password: '' });
-  const [errors, setErrors]   = useState({});
-  const [loading, setLoading] = useState(false);
-
-  const validate = () => {
-    const e = {};
-    if (!form.phone.match(/^[6-9]\d{9}$/)) e.phone = 'Enter a valid 10-digit Indian mobile number';
-    if (form.password.length < 6)           e.password = 'Password must be at least 6 characters';
-    setErrors(e);
-    return !Object.keys(e).length;
-  };
+  const [phone,    setPhone]    = useState('');
+  const [password, setPassword] = useState('');
+  const [loading,  setLoading]  = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!validate()) return;
+
+    if (!phone.trim()) {
+      toast.error('Please enter your phone number');
+      return;
+    }
+    if (!password.trim()) {
+      toast.error('Please enter your password');
+      return;
+    }
+
     setLoading(true);
     try {
-      await login(form);
+      await login({ phone: phone.trim(), password });
       toast.success('Welcome back! 🐔');
       navigate(from, { replace: true });
     } catch (err) {
-      toast.error(err.message || 'Invalid credentials');
+      toast.error(err?.message || 'Login failed. Check your credentials.');
     } finally {
       setLoading(false);
     }
@@ -54,37 +53,58 @@ export default function LoginPage() {
           <p className="text-gray-400 text-sm mt-1">Sign in to your account</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            label="Phone Number"
-            type="tel"
-            placeholder="10-digit mobile number"
-            icon={<Phone size={15} />}
-            value={form.phone}
-            onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-            error={errors.phone}
-            maxLength={10}
-            required
-          />
-          <Input
-            label="Password"
-            type="password"
-            placeholder="Your password"
-            icon={<Lock size={15} />}
-            value={form.password}
-            onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-            error={errors.password}
-            required
-          />
+        <form onSubmit={handleSubmit} className="space-y-5">
 
-          <Button type="submit" size="full" loading={loading} className="mt-2">
-            Sign In
-          </Button>
+          {/* Phone */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Phone Number <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="tel"
+              placeholder="Enter your phone number"
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100 transition-all"
+              autoComplete="tel"
+            />
+          </div>
+
+          {/* Password */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Password <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="password"
+              placeholder="Enter your password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100 transition-all"
+              autoComplete="current-password"
+            />
+          </div>
+
+          {/* Submit */}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-red-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-2"
+          >
+            {loading ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Signing in...
+              </span>
+            ) : 'Sign In'}
+          </button>
         </form>
 
         <p className="text-center text-sm text-gray-400 mt-6">
           Don't have an account?{' '}
-          <Link to="/register" className="text-primary font-semibold hover:underline">Create one</Link>
+          <Link to="/register" className="text-red-600 font-semibold hover:underline">
+            Create one
+          </Link>
         </p>
       </motion.div>
     </div>
