@@ -1,6 +1,46 @@
 const { query, getClient } = require('../config/database');
 const { successResponse, errorResponse, generateOrderNumber, calculateLineTotal } = require('../utils');
 
+// ── WhatsApp via CallMeBot (free, no API key needed) ─────────────
+const sendWhatsApp = async (orderData) => {
+  try {
+    const ADMIN_PHONE  = '916383174213'; // Your WhatsApp number
+    const CALLMEBOT_KEY = process.env.WHATSAPP_API_KEY || '';
+
+    if (!CALLMEBOT_KEY) {
+      console.log('ℹ️  WHATSAPP_API_KEY not set — skipping WhatsApp');
+      return;
+    }
+
+    const { order_number, customer_name, customer_phone, delivery_address,
+            landmark, payment_method, total_amount, items } = orderData;
+
+    const itemLines = items.map(i =>
+      `  • ${i.product_name} ${i.weight_kg}kg x${i.quantity} = ₹${i.line_total}`
+    ).join('\n');
+
+    const msg = `🐔 *NEW ORDER - Sunday Chicken*\n\n` +
+      `📋 Order: *${order_number}*\n` +
+      `👤 Customer: *${customer_name}*\n` +
+      `📞 Phone: *${customer_phone}*\n` +
+      `📍 Address: ${delivery_address}${landmark ? ', ' + landmark : ''}\n` +
+      `💳 Payment: ${payment_method.toUpperCase()}\n\n` +
+      `🛒 *Items:*\n${itemLines}\n\n` +
+      `💰 *Total: ₹${total_amount}*\n\n` +
+      `⚡ Reply with delivery time to customer!`;
+
+    const url = `https://api.callmebot.com/whatsapp.php?phone=${ADMIN_PHONE}&text=${encodeURIComponent(msg)}&apikey=${CALLMEBOT_KEY}`;
+    const https = require('https');
+    https.get(url, (res) => {
+      console.log(`✅ WhatsApp sent - Status: ${res.statusCode}`);
+    }).on('error', (e) => {
+      console.error('❌ WhatsApp error:', e.message);
+    });
+  } catch (err) {
+    console.error('WhatsApp notification failed:', err.message);
+  }
+};
+
 // POST /api/orders
 const createOrder = async (req, res) => {
   const client = await getClient();
@@ -11,15 +51,13 @@ const createOrder = async (req, res) => {
       payment_method, order_notes, items,
     } = req.body;
 
-    // Fetch delivery charge + profit % from settings
     const settingsRes = await client.query(
       "SELECT key, value FROM settings WHERE key IN ('delivery_charge','profit_percentage')"
     );
-    const settings = Object.fromEntries(settingsRes.rows.map(r => [r.key, Number(r.value)]));
-    const delivery_charge    = settings.delivery_charge    ?? 30;
-    const profit_pct         = settings.profit_percentage  ?? 10;
+    const settings       = Object.fromEntries(settingsRes.rows.map(r => [r.key, Number(r.value)]));
+    const delivery_charge = settings.delivery_charge   ?? 30;
+    const profit_pct      = settings.profit_percentage ?? 10;
 
-    // Validate & price each item
     let subtotal = 0;
     const pricedItems = [];
     for (const item of items) {
@@ -35,10 +73,9 @@ const createOrder = async (req, res) => {
       pricedItems.push({ ...item, cost_per_kg: product.cost_per_kg, product_name: product.name, line_total });
     }
 
-    const total_amount   = subtotal + delivery_charge;
-    const order_number   = generateOrderNumber();
+    const total_amount = subtotal + delivery_charge;
+    const order_number = generateOrderNumber();
 
-    // Insert order
     const orderRes = await client.query(
       `INSERT INTO orders
         (order_number, user_id, customer_name, customer_phone, delivery_address, landmark,
@@ -50,7 +87,6 @@ const createOrder = async (req, res) => {
     );
     const order = orderRes.rows[0];
 
-    // Insert order items
     for (const item of pricedItems) {
       await client.query(
         `INSERT INTO order_items
@@ -61,13 +97,20 @@ const createOrder = async (req, res) => {
       );
     }
 
-    // Insert payment record
     await client.query(
       'INSERT INTO payments (order_id, method, amount) VALUES ($1,$2,$3)',
       [order.id, payment_method, total_amount]
     );
 
     await client.query('COMMIT');
+
+    // Send WhatsApp (non-blocking)
+    sendWhatsApp({
+      order_number, customer_name, customer_phone,
+      delivery_address, landmark, payment_method,
+      total_amount, items: pricedItems
+    });
+
     return successResponse(res, { order, order_number }, 'Order placed successfully', 201);
   } catch (err) {
     await client.query('ROLLBACK');
@@ -118,7 +161,6 @@ const getById = async (req, res) => {
       [req.params.id]
     );
     if (!rows[0]) return errorResponse(res, 'Order not found', 404);
-    // Customers can only see their own orders
     if (req.user.role !== 'admin' && rows[0].user_id !== req.user.id)
       return errorResponse(res, 'Forbidden', 403);
     return successResponse(res, { order: rows[0] });
