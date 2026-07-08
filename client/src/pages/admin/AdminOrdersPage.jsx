@@ -1,201 +1,298 @@
-import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { RefreshCw, Check, X, Clock } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import { Clock, Phone, CheckCircle, XCircle, ChevronDown, ChevronUp, MapPin } from 'lucide-react';
 import { AdminLayout } from '@/components/layout';
-import { OrderStatusBadge, Modal, Button, Spinner } from '@/components/ui';
+import { Spinner, OrderStatusBadge } from '@/components/ui';
 import { orderService } from '@/services/order.service';
-import { ORDER_STATUSES } from '@/constants';
-import { formatPrice, shortOrderId, formatDate } from '@/utils';
+import { formatPrice, formatDate, shortOrderId } from '@/utils';
 import toast from 'react-hot-toast';
 
+const STATUS_OPTIONS = [
+  { value: 'received',         label: '📦 Order Received' },
+  { value: 'preparing',        label: '🔪 Preparing'      },
+  { value: 'packed',           label: '📫 Packed'         },
+  { value: 'out_for_delivery', label: '🛵 Out for Delivery'},
+  { value: 'delivered',        label: '✅ Delivered'       },
+];
+
+const ETA_OPTIONS = ['20 Minutes','30 Minutes','40 Minutes','45 Minutes','1 Hour','1.5 Hours'];
+
 export default function AdminOrdersPage() {
-  const [orders, setOrders]     = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [selected, setSelected] = useState(null);
-  const [etaModal, setEtaModal] = useState(false);
-  const [eta, setEta]           = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [orders,     setOrders]     = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [expanded,   setExpanded]   = useState(null);
+  const [etaInputs,  setEtaInputs]  = useState({});
+  const [updating,   setUpdating]   = useState({});
 
-  const fetchOrders = useCallback(() => {
-    setLoading(true);
-    orderService.getAll({ status: statusFilter || undefined })
-      .then(res  => setOrders(res.data?.orders || []))
-      .catch(()  => toast.error('Failed to load orders'))
-      .finally(()=> setLoading(false));
-  }, [statusFilter]);
+  useEffect(() => {
+    orderService.getAll()
+      .then(res => setOrders(res?.data?.orders || res?.orders || []))
+      .catch(() => toast.error('Failed to load orders'))
+      .finally(() => setLoading(false));
+  }, []);
 
-  useEffect(() => { fetchOrders(); }, [fetchOrders]);
-
-  const updateStatus = async (id, status) => {
-    try {
-      await orderService.updateStatus(id, status);
-      toast.success(`Status updated to "${status}"`);
-      fetchOrders();
-      setSelected(null);
-    } catch { toast.error('Update failed'); }
+  const refresh = () => {
+    orderService.getAll()
+      .then(res => setOrders(res?.data?.orders || res?.orders || []));
   };
 
-  const handleETA = async () => {
-    if (!eta || !selected) return;
-    try {
-      await orderService.updateETA(selected.id, eta);
-      toast.success(`ETA set to ${eta}`);
-      setEtaModal(false); setEta(''); fetchOrders();
-    } catch { toast.error('Failed to set ETA'); }
-  };
+  const setUpdatingKey = (id, val) => setUpdating(u => ({ ...u, [id]: val }));
 
-  const handleAccept = async (id) => {
-    try { await orderService.accept(id); toast.success('Order accepted'); fetchOrders(); }
-    catch { toast.error('Failed'); }
+  const handleAccept = async (order) => {
+    const eta = etaInputs[order.id] || '40 Minutes';
+    setUpdatingKey(order.id, 'accept');
+    try {
+      await orderService.accept(order.id, { estimated_delivery: eta });
+      toast.success(`Order accepted — ETA: ${eta} ✅`);
+      refresh();
+    } catch { toast.error('Failed to accept'); }
+    finally { setUpdatingKey(order.id, null); }
   };
 
   const handleReject = async (id) => {
-    try { await orderService.reject(id); toast.success('Order rejected'); fetchOrders(); }
-    catch { toast.error('Failed'); }
+    if (!confirm('Reject this order?')) return;
+    setUpdatingKey(id, 'reject');
+    try {
+      await orderService.reject(id, { admin_note: 'Rejected by admin' });
+      toast.success('Order rejected');
+      refresh();
+    } catch { toast.error('Failed to reject'); }
+    finally { setUpdatingKey(id, null); }
   };
+
+  const handleStatusChange = async (id, status) => {
+    setUpdatingKey(id, 'status');
+    try {
+      await orderService.updateStatus(id, status);
+      setOrders(os => os.map(o => o.id === id ? { ...o, status } : o));
+      toast.success('Status updated ✅');
+    } catch { toast.error('Failed to update status'); }
+    finally { setUpdatingKey(id, null); }
+  };
+
+  const handleEtaUpdate = async (id) => {
+    const eta = etaInputs[id];
+    if (!eta) { toast.error('Enter delivery time'); return; }
+    setUpdatingKey(id, 'eta');
+    try {
+      await orderService.updateETA(id, eta);
+      setOrders(os => os.map(o => o.id === id ? { ...o, estimated_delivery: eta } : o));
+      toast.success(`ETA updated: ${eta} ✅`);
+    } catch { toast.error('Failed to update ETA'); }
+    finally { setUpdatingKey(id, null); }
+  };
+
+  if (loading) return (
+    <AdminLayout>
+      <div className="flex justify-center py-20"><Spinner size="lg" /></div>
+    </AdminLayout>
+  );
 
   return (
     <AdminLayout>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="font-poppins font-bold text-2xl text-accent">Orders</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{orders.length} orders</p>
+          <p className="text-sm text-gray-400">{orders.length} total orders</p>
         </div>
-        <button onClick={fetchOrders} className="p-2.5 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors">
-          <RefreshCw size={17} className={loading ? 'animate-spin text-primary' : 'text-gray-500'} />
+        <button onClick={refresh} className="text-sm text-primary font-medium hover:underline">
+          Refresh
         </button>
       </div>
 
-      {/* Status filter tabs */}
-      <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2 mb-5">
-        {[{ id: '', label: 'All' }, ...ORDER_STATUSES].map(s => (
-          <button
-            key={s.id}
-            onClick={() => setStatusFilter(s.id)}
-            className={`flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-semibold border transition-all ${
-              statusFilter === s.id
-                ? 'bg-primary text-white border-primary'
-                : 'bg-white text-gray-500 border-gray-200 hover:border-primary'
-            }`}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Orders table */}
-      {loading ? (
-        <div className="flex justify-center py-16"><Spinner size="lg" /></div>
-      ) : orders.length === 0 ? (
-        <div className="text-center py-16 text-gray-400 text-sm">No orders found</div>
+      {orders.length === 0 ? (
+        <div className="text-center py-20 text-gray-400">
+          <div className="text-5xl mb-4">📦</div>
+          <p className="font-medium">No orders yet</p>
+        </div>
       ) : (
-        <div className="bg-white rounded-2xl shadow-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
-                  {['Order', 'Customer', 'Amount', 'Payment', 'Status', 'Date', 'Actions'].map(h => (
-                    <th key={h} className="px-4 py-3 font-semibold">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {orders.map(order => (
-                  <motion.tr
-                    key={order.id}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="hover:bg-gray-50 cursor-pointer"
-                    onClick={() => setSelected(order)}
-                  >
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{shortOrderId(order.order_number || order.id)}</td>
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-accent">{order.customer_name}</p>
-                      <p className="text-xs text-gray-400">{order.customer_phone}</p>
-                    </td>
-                    <td className="px-4 py-3 font-bold text-accent">{formatPrice(order.total_amount)}</td>
-                    <td className="px-4 py-3">
-                      <span className="uppercase text-xs font-semibold text-gray-500">{order.payment_method}</span>
-                    </td>
-                    <td className="px-4 py-3"><OrderStatusBadge status={order.status} /></td>
-                    <td className="px-4 py-3 text-xs text-gray-400">{formatDate(order.created_at)}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1.5" onClick={e => e.stopPropagation()}>
-                        {order.status === 'received' && (
-                          <>
-                            <button onClick={() => handleAccept(order.id)} className="p-1.5 bg-green-100 text-green-600 rounded-lg hover:bg-green-200 transition-colors"><Check size={13} /></button>
-                            <button onClick={() => handleReject(order.id)} className="p-1.5 bg-red-100 text-red-500 rounded-lg hover:bg-red-200 transition-colors"><X size={13} /></button>
-                          </>
-                        )}
-                        <button onClick={() => { setSelected(order); setEtaModal(true); }} className="p-1.5 bg-yellow-100 text-yellow-600 rounded-lg hover:bg-yellow-200 transition-colors"><Clock size={13} /></button>
+        <div className="space-y-4">
+          {orders.map(order => {
+            const isExpanded  = expanded === order.id;
+            const isUpdating  = updating[order.id];
+            const items       = order.items || [];
+
+            return (
+              <motion.div
+                key={order.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white rounded-2xl shadow-card border border-gray-100 overflow-hidden"
+              >
+                {/* Header */}
+                <div
+                  className="p-4 cursor-pointer hover:bg-gray-50 transition"
+                  onClick={() => setExpanded(isExpanded ? null : order.id)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <span className="font-poppins font-bold text-accent">
+                          {shortOrderId(order.order_number || order.id)}
+                        </span>
+                        <OrderStatusBadge status={order.status} />
                       </div>
-                    </td>
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      <p className="text-sm font-semibold text-gray-700">{order.customer_name}</p>
+                      <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
+                        <Phone size={11} />
+                        <a
+                          href={`tel:${order.customer_phone}`}
+                          onClick={e => e.stopPropagation()}
+                          className="text-primary font-medium hover:underline"
+                        >
+                          {order.customer_phone}
+                        </a>
+                        <span className="mx-1">·</span>
+                        <span>{formatDate(order.created_at)}</span>
+                      </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="font-bold text-accent">{formatPrice(order.total_amount)}</p>
+                      <p className="text-xs text-gray-400 capitalize">{order.payment_method}</p>
+                      {isExpanded
+                        ? <ChevronUp size={16} className="text-gray-400 ml-auto mt-1" />
+                        : <ChevronDown size={16} className="text-gray-400 ml-auto mt-1" />
+                      }
+                    </div>
+                  </div>
+
+                  {/* ETA preview */}
+                  {order.estimated_delivery && (
+                    <div className="mt-2 flex items-center gap-1.5 text-xs text-green-600 font-medium">
+                      <Clock size={12} /> ETA: {order.estimated_delivery}
+                    </div>
+                  )}
+                </div>
+
+                {/* Expanded details */}
+                {isExpanded && (
+                  <div className="border-t border-gray-100 p-4 space-y-4">
+
+                    {/* Address */}
+                    <div className="flex items-start gap-2 text-sm text-gray-600 bg-gray-50 rounded-xl p-3">
+                      <MapPin size={14} className="mt-0.5 text-primary flex-shrink-0" />
+                      <span>
+                        {order.delivery_address}
+                        {order.landmark ? `, ${order.landmark}` : ''}
+                      </span>
+                    </div>
+
+                    {/* Items */}
+                    <div className="bg-gray-50 rounded-xl p-3 space-y-2">
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Items</p>
+                      {items.map((item, i) => (
+                        <div key={i} className="flex justify-between text-sm">
+                          <span className="text-gray-700">
+                            {item.product_name} · {item.weight_kg}kg × {item.quantity}
+                          </span>
+                          <span className="font-semibold">{formatPrice(item.line_total)}</span>
+                        </div>
+                      ))}
+                      {item?.special_instruction && (
+                        <p className="text-xs text-orange-600 bg-orange-50 rounded-lg px-2 py-1 mt-1">
+                          📝 {items[0]?.special_instruction}
+                        </p>
+                      )}
+                    </div>
+
+                    {order.order_notes && (
+                      <div className="bg-yellow-50 rounded-xl p-3 text-sm text-yellow-800">
+                        📝 <span className="font-medium">Note:</span> {order.order_notes}
+                      </div>
+                    )}
+
+                    {/* ── DELIVERY TIME SETTER ── */}
+                    <div className="bg-blue-50 rounded-xl p-4">
+                      <p className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
+                        <Clock size={14} className="text-blue-500" />
+                        Set / Update Delivery Time
+                      </p>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {ETA_OPTIONS.map(opt => (
+                          <button
+                            key={opt}
+                            onClick={() => setEtaInputs(e => ({ ...e, [order.id]: opt }))}
+                            className={`text-xs px-3 py-1.5 rounded-full border font-medium transition ${
+                              etaInputs[order.id] === opt
+                                ? 'bg-primary text-white border-primary'
+                                : 'bg-white text-gray-600 border-gray-200 hover:border-primary'
+                            }`}
+                          >
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={etaInputs[order.id] || ''}
+                          onChange={e => setEtaInputs(i => ({ ...i, [order.id]: e.target.value }))}
+                          placeholder="Or type custom e.g. 25 Minutes"
+                          className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary"
+                        />
+                        <button
+                          onClick={() => handleEtaUpdate(order.id)}
+                          disabled={!!isUpdating}
+                          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:bg-blue-700 transition disabled:opacity-50"
+                        >
+                          {isUpdating === 'eta' ? '...' : 'Set'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* ── STATUS UPDATE ── */}
+                    <div>
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                        Update Status
+                      </p>
+                      <select
+                        value={order.status}
+                        onChange={e => handleStatusChange(order.id, e.target.value)}
+                        disabled={!!isUpdating || order.status === 'rejected'}
+                        className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-primary disabled:opacity-50"
+                      >
+                        {STATUS_OPTIONS.map(s => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* ── ACCEPT / REJECT (new orders only) ── */}
+                    {order.status === 'received' && (
+                      <div className="flex gap-3 pt-1">
+                        <button
+                          onClick={() => handleAccept(order)}
+                          disabled={!!isUpdating}
+                          className="flex-1 flex items-center justify-center gap-2 bg-green-600 text-white font-semibold py-3 rounded-xl hover:bg-green-700 transition disabled:opacity-50"
+                        >
+                          <CheckCircle size={16} />
+                          {isUpdating === 'accept' ? 'Accepting…' : `Accept (ETA: ${etaInputs[order.id] || '40 Minutes'})`}
+                        </button>
+                        <button
+                          onClick={() => handleReject(order.id)}
+                          disabled={!!isUpdating}
+                          className="flex items-center justify-center gap-2 bg-red-50 text-red-600 border border-red-200 font-semibold px-4 py-3 rounded-xl hover:bg-red-100 transition disabled:opacity-50"
+                        >
+                          <XCircle size={16} />
+                          {isUpdating === 'reject' ? '…' : 'Reject'}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Call customer button */}
+                    <a
+                      href={`tel:${order.customer_phone}`}
+                      className="flex items-center justify-center gap-2 w-full bg-gray-100 text-gray-700 font-semibold py-3 rounded-xl hover:bg-gray-200 transition text-sm"
+                    >
+                      <Phone size={15} /> Call Customer ({order.customer_phone})
+                    </a>
+                  </div>
+                )}
+              </motion.div>
+            );
+          })}
         </div>
       )}
-
-      {/* Order detail modal */}
-      <Modal isOpen={!!selected && !etaModal} onClose={() => setSelected(null)} title={`Order ${shortOrderId(selected?.order_number || selected?.id)}`} size="lg">
-        {selected && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div><p className="text-gray-400 text-xs">Customer</p><p className="font-semibold">{selected.customer_name}</p></div>
-              <div><p className="text-gray-400 text-xs">Phone</p><p className="font-semibold">{selected.customer_phone}</p></div>
-              <div className="col-span-2"><p className="text-gray-400 text-xs">Address</p><p className="font-medium">{selected.delivery_address}</p></div>
-              {selected.landmark && <div className="col-span-2"><p className="text-gray-400 text-xs">Landmark</p><p>{selected.landmark}</p></div>}
-            </div>
-
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Items</p>
-              {selected.order_items?.map((item, i) => (
-                <div key={i} className="flex justify-between text-sm py-1.5 border-b border-gray-50 last:border-0">
-                  <span className="text-gray-700">{item.product_name} · {item.weight_kg}kg × {item.quantity}</span>
-                  <span className="font-semibold">{formatPrice(item.line_total)}</span>
-                </div>
-              ))}
-              <div className="flex justify-between font-bold text-base pt-2">
-                <span>Total</span><span className="text-primary">{formatPrice(selected.total_amount)}</span>
-              </div>
-            </div>
-
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Update Status</p>
-              <div className="flex flex-wrap gap-2">
-                {ORDER_STATUSES.map(s => (
-                  <button
-                    key={s.id}
-                    onClick={() => updateStatus(selected.id, s.id)}
-                    className={`px-3 py-1.5 rounded-pill text-xs font-semibold border transition-all ${
-                      selected.status === s.id
-                        ? 'bg-primary text-white border-primary'
-                        : 'border-gray-200 text-gray-600 hover:border-primary'
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* ETA modal */}
-      <Modal isOpen={etaModal} onClose={() => setEtaModal(false)} title="Set Estimated Delivery Time" size="sm">
-        <div className="space-y-4">
-          <input
-            value={eta}
-            onChange={e => setEta(e.target.value)}
-            placeholder="e.g. 35 Minutes"
-            className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100"
-          />
-          <Button size="full" onClick={handleETA}>Set ETA</Button>
-        </div>
-      </Modal>
     </AdminLayout>
   );
 }
