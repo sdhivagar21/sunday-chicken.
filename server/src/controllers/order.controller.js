@@ -1,41 +1,70 @@
 const { query, getClient } = require('../config/database');
 const { successResponse, errorResponse, generateOrderNumber, calculateLineTotal } = require('../utils');
+const https = require('https');
 
-// ── WhatsApp via CallMeBot (free, no API key needed) ─────────────
+// ── WhatsApp via Green API (free 100 msgs/day) ────────────────────
+// Setup: https://green-api.com → Register → Get idInstance + apiTokenInstance
 const sendWhatsApp = async (orderData) => {
   try {
-    const ADMIN_PHONE  = '916383174213'; // Your WhatsApp number
-    const CALLMEBOT_KEY = process.env.WHATSAPP_API_KEY || '';
+    const idInstance       = process.env.GREEN_API_ID;
+    const apiTokenInstance = process.env.GREEN_API_TOKEN;
+    const ADMIN_PHONE      = '916383174213';
 
-    if (!CALLMEBOT_KEY) {
-      console.log('ℹ️  WHATSAPP_API_KEY not set — skipping WhatsApp');
+    if (!idInstance || !apiTokenInstance) {
+      console.log('ℹ️  GREEN_API not configured — skipping WhatsApp');
       return;
     }
 
-    const { order_number, customer_name, customer_phone, delivery_address,
-            landmark, payment_method, total_amount, items } = orderData;
+    const { order_number, customer_name, customer_phone,
+            delivery_address, landmark, payment_method, total_amount, items } = orderData;
 
     const itemLines = items.map(i =>
-      `  • ${i.product_name} ${i.weight_kg}kg x${i.quantity} = ₹${i.line_total}`
+      `  • ${i.product_name} (${i.weight_kg}kg x${i.quantity}) = ₹${i.line_total}`
     ).join('\n');
 
-    const msg = `🐔 *NEW ORDER - Sunday Chicken*\n\n` +
-      `📋 Order: *${order_number}*\n` +
+    const message =
+      `🐔 *NEW ORDER - Sunday Chicken*\n\n` +
+      `📋 Order No: *${order_number}*\n` +
       `👤 Customer: *${customer_name}*\n` +
       `📞 Phone: *${customer_phone}*\n` +
       `📍 Address: ${delivery_address}${landmark ? ', ' + landmark : ''}\n` +
-      `💳 Payment: ${payment_method.toUpperCase()}\n\n` +
+      `💳 Payment: ${payment_method === 'cod' ? 'Cash on Delivery' : 'UPI'}\n\n` +
       `🛒 *Items:*\n${itemLines}\n\n` +
       `💰 *Total: ₹${total_amount}*\n\n` +
-      `⚡ Reply with delivery time to customer!`;
+      `⚡ Please confirm delivery time!`;
 
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${ADMIN_PHONE}&text=${encodeURIComponent(msg)}&apikey=${CALLMEBOT_KEY}`;
-    const https = require('https');
-    https.get(url, (res) => {
-      console.log(`✅ WhatsApp sent - Status: ${res.statusCode}`);
-    }).on('error', (e) => {
-      console.error('❌ WhatsApp error:', e.message);
+    const postData = JSON.stringify({
+      chatId:  `${ADMIN_PHONE}@c.us`,
+      message,
     });
+
+    const options = {
+      hostname: 'api.green-api.com',
+      path:     `/waInstance${idInstance}/sendMessage/${apiTokenInstance}`,
+      method:   'POST',
+      headers:  {
+        'Content-Type':   'application/json',
+        'Content-Length': Buffer.byteLength(postData),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        const parsed = JSON.parse(data);
+        if (parsed.idMessage) {
+          console.log('✅ WhatsApp sent! ID:', parsed.idMessage);
+        } else {
+          console.error('❌ WhatsApp failed:', data);
+        }
+      });
+    });
+
+    req.on('error', (e) => console.error('❌ WhatsApp request error:', e.message));
+    req.write(postData);
+    req.end();
+
   } catch (err) {
     console.error('WhatsApp notification failed:', err.message);
   }
@@ -46,6 +75,7 @@ const createOrder = async (req, res) => {
   const client = await getClient();
   try {
     await client.query('BEGIN');
+
     const {
       customer_name, customer_phone, delivery_address, landmark,
       payment_method, order_notes, items,
@@ -54,15 +84,17 @@ const createOrder = async (req, res) => {
     const settingsRes = await client.query(
       "SELECT key, value FROM settings WHERE key IN ('delivery_charge','profit_percentage')"
     );
-    const settings       = Object.fromEntries(settingsRes.rows.map(r => [r.key, Number(r.value)]));
+    const settings        = Object.fromEntries(settingsRes.rows.map(r => [r.key, Number(r.value)]));
     const delivery_charge = settings.delivery_charge   ?? 30;
     const profit_pct      = settings.profit_percentage ?? 10;
 
     let subtotal = 0;
     const pricedItems = [];
+
     for (const item of items) {
       const prodRes = await client.query(
-        'SELECT id, name, cost_per_kg, is_available FROM products WHERE id=$1', [item.product_id]
+        'SELECT id, name, cost_per_kg, is_available FROM products WHERE id=$1',
+        [item.product_id]
       );
       const product = prodRes.rows[0];
       if (!product || !product.is_available)
@@ -70,7 +102,12 @@ const createOrder = async (req, res) => {
 
       const line_total = calculateLineTotal(product.cost_per_kg, item.weight_kg, item.quantity, profit_pct);
       subtotal += line_total;
-      pricedItems.push({ ...item, cost_per_kg: product.cost_per_kg, product_name: product.name, line_total });
+      pricedItems.push({
+        ...item,
+        cost_per_kg:  product.cost_per_kg,
+        product_name: product.name,
+        line_total,
+      });
     }
 
     const total_amount = subtotal + delivery_charge;
@@ -81,9 +118,11 @@ const createOrder = async (req, res) => {
         (order_number, user_id, customer_name, customer_phone, delivery_address, landmark,
          payment_method, subtotal, delivery_charge, total_amount, order_notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [order_number, req.user?.id || null, customer_name, customer_phone,
-       delivery_address, landmark || null, payment_method,
-       subtotal, delivery_charge, total_amount, order_notes || null]
+      [
+        order_number, req.user?.id || null, customer_name, customer_phone,
+        delivery_address, landmark || null, payment_method,
+        subtotal, delivery_charge, total_amount, order_notes || null,
+      ]
     );
     const order = orderRes.rows[0];
 
@@ -92,8 +131,10 @@ const createOrder = async (req, res) => {
         `INSERT INTO order_items
           (order_id, product_id, product_name, cost_per_kg, weight_kg, quantity, special_instruction, line_total)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [order.id, item.product_id, item.product_name, item.cost_per_kg,
-         item.weight_kg, item.quantity, item.special_instruction || null, item.line_total]
+        [
+          order.id, item.product_id, item.product_name, item.cost_per_kg,
+          item.weight_kg, item.quantity, item.special_instruction || null, item.line_total,
+        ]
       );
     }
 
@@ -108,7 +149,7 @@ const createOrder = async (req, res) => {
     sendWhatsApp({
       order_number, customer_name, customer_phone,
       delivery_address, landmark, payment_method,
-      total_amount, items: pricedItems
+      total_amount, items: pricedItems,
     });
 
     return successResponse(res, { order, order_number }, 'Order placed successfully', 201);
@@ -121,7 +162,6 @@ const createOrder = async (req, res) => {
   }
 };
 
-// GET /api/orders/my
 const getMyOrders = async (req, res) => {
   try {
     const { rows } = await query(
@@ -144,7 +184,6 @@ const getMyOrders = async (req, res) => {
   }
 };
 
-// GET /api/orders/:id
 const getById = async (req, res) => {
   try {
     const { rows } = await query(
