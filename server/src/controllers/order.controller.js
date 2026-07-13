@@ -2,72 +2,123 @@ const { query, getClient } = require('../config/database');
 const { successResponse, errorResponse, generateOrderNumber, calculateLineTotal } = require('../utils');
 const https = require('https');
 
-// ── WhatsApp via Green API (free 100 msgs/day) ────────────────────
-// Setup: https://green-api.com → Register → Get idInstance + apiTokenInstance
-const sendWhatsApp = async (orderData) => {
-  try {
-    const idInstance       = process.env.GREEN_API_ID;
-    const apiTokenInstance = process.env.GREEN_API_TOKEN;
-    const ADMIN_PHONE      = '916383174213';
+// ── Send WhatsApp via Green API ───────────────────────────────────
+const sendWhatsAppMessage = (toPhone, message) => {
+  return new Promise((resolve) => {
+    try {
+      const idInstance       = process.env.GREEN_API_ID;
+      const apiTokenInstance = process.env.GREEN_API_TOKEN;
 
-    if (!idInstance || !apiTokenInstance) {
-      console.log('ℹ️  GREEN_API not configured — skipping WhatsApp');
-      return;
-    }
+      if (!idInstance || !apiTokenInstance) {
+        console.log('ℹ️  GREEN_API not configured — skipping WhatsApp');
+        return resolve(false);
+      }
 
-    const { order_number, customer_name, customer_phone,
-            delivery_address, landmark, payment_method, total_amount, items } = orderData;
-
-    const itemLines = items.map(i =>
-      `  • ${i.product_name} (${i.weight_kg}kg x${i.quantity}) = ₹${i.line_total}`
-    ).join('\n');
-
-    const message =
-      `🐔 *NEW ORDER - Sunday Chicken*\n\n` +
-      `📋 Order No: *${order_number}*\n` +
-      `👤 Customer: *${customer_name}*\n` +
-      `📞 Phone: *${customer_phone}*\n` +
-      `📍 Address: ${delivery_address}${landmark ? ', ' + landmark : ''}\n` +
-      `💳 Payment: ${payment_method === 'cod' ? 'Cash on Delivery' : 'UPI'}\n\n` +
-      `🛒 *Items:*\n${itemLines}\n\n` +
-      `💰 *Total: ₹${total_amount}*\n\n` +
-      `⚡ Please confirm delivery time!`;
-
-    const postData = JSON.stringify({
-      chatId:  `${ADMIN_PHONE}@c.us`,
-      message,
-    });
-
-    const options = {
-      hostname: 'api.green-api.com',
-      path:     `/waInstance${idInstance}/sendMessage/${apiTokenInstance}`,
-      method:   'POST',
-      headers:  {
-        'Content-Type':   'application/json',
-        'Content-Length': Buffer.byteLength(postData),
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => {
-        const parsed = JSON.parse(data);
-        if (parsed.idMessage) {
-          console.log('✅ WhatsApp sent! ID:', parsed.idMessage);
-        } else {
-          console.error('❌ WhatsApp failed:', data);
-        }
+      const postData = JSON.stringify({
+        chatId:  `${toPhone}@c.us`,
+        message,
       });
-    });
 
-    req.on('error', (e) => console.error('❌ WhatsApp request error:', e.message));
-    req.write(postData);
-    req.end();
+      const options = {
+        hostname: 'api.green-api.com',
+        path:     `/waInstance${idInstance}/sendMessage/${apiTokenInstance}`,
+        method:   'POST',
+        headers:  {
+          'Content-Type':   'application/json',
+          'Content-Length': Buffer.byteLength(postData),
+        },
+      };
 
-  } catch (err) {
-    console.error('WhatsApp notification failed:', err.message);
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.idMessage) {
+              console.log(`✅ WhatsApp sent to ${toPhone}`);
+              resolve(true);
+            } else {
+              console.error(`❌ WhatsApp failed to ${toPhone}:`, data);
+              resolve(false);
+            }
+          } catch {
+            resolve(false);
+          }
+        });
+      });
+
+      req.on('error', (e) => {
+        console.error('❌ WhatsApp error:', e.message);
+        resolve(false);
+      });
+
+      req.write(postData);
+      req.end();
+    } catch (err) {
+      console.error('WhatsApp send error:', err.message);
+      resolve(false);
+    }
+  });
+};
+
+// ── Notify ADMIN about new order ─────────────────────────────────
+const notifyAdmin = async (orderData) => {
+  const ADMIN_PHONE = process.env.ADMIN_WHATSAPP_PHONE || '916383174213';
+
+  const { order_number, customer_name, customer_phone,
+          delivery_address, landmark, payment_method, total_amount, items } = orderData;
+
+  const itemLines = items.map(i =>
+    `  • ${i.product_name} (${i.weight_kg}kg x${i.quantity}) = ₹${i.line_total}`
+  ).join('\n');
+
+  const message =
+    `🐔 *NEW ORDER - Sunday Chicken*\n\n` +
+    `📋 Order: *${order_number}*\n` +
+    `👤 Customer: *${customer_name}*\n` +
+    `📞 Phone: *${customer_phone}*\n` +
+    `📍 Address: ${delivery_address}${landmark ? ', ' + landmark : ''}\n` +
+    `💳 Payment: ${payment_method === 'cod' ? 'Cash on Delivery' : 'UPI'}\n\n` +
+    `🛒 *Items:*\n${itemLines}\n\n` +
+    `💰 *Total: ₹${total_amount}*\n\n` +
+    `⚡ Please confirm delivery time to customer!`;
+
+  await sendWhatsAppMessage(ADMIN_PHONE, message);
+};
+
+// ── Notify CUSTOMER about order confirmation ──────────────────────
+const notifyCustomer = async (orderData) => {
+  const { order_number, customer_name, customer_phone,
+          delivery_address, total_amount, items, payment_method } = orderData;
+
+  // Only send if customer phone is valid Indian mobile
+  const cleanPhone = customer_phone.replace(/\D/g, '');
+  const phoneWith91 = cleanPhone.startsWith('91') ? cleanPhone : `91${cleanPhone}`;
+  if (phoneWith91.length !== 12) {
+    console.log('⚠️  Invalid customer phone, skipping customer WhatsApp');
+    return;
   }
+
+  const itemLines = items.map(i =>
+    `  • ${i.product_name} (${i.weight_kg}kg) = ₹${i.line_total}`
+  ).join('\n');
+
+  const ADMIN_PHONE_DISPLAY = process.env.ADMIN_WHATSAPP_PHONE?.replace('91','') || '6383174213';
+
+  const message =
+    `🐔 *Sunday Chicken - Order Confirmed!*\n\n` +
+    `Hi *${customer_name}*! Your order has been placed successfully.\n\n` +
+    `📋 *Order ID: ${order_number}*\n\n` +
+    `🛒 *Your Items:*\n${itemLines}\n\n` +
+    `📍 Delivering to: ${delivery_address}\n` +
+    `💳 Payment: ${payment_method === 'cod' ? 'Cash on Delivery' : 'UPI'}\n` +
+    `💰 *Total Amount: ₹${total_amount}*\n\n` +
+    `⏳ Delivery time will be confirmed shortly.\n\n` +
+    `📞 *Questions? Call us: ${ADMIN_PHONE_DISPLAY}*\n\n` +
+    `Thank you for ordering! 😊`;
+
+  await sendWhatsAppMessage(phoneWith91, message);
 };
 
 // POST /api/orders
@@ -145,12 +196,15 @@ const createOrder = async (req, res) => {
 
     await client.query('COMMIT');
 
-    // Send WhatsApp (non-blocking)
-    sendWhatsApp({
+    // Send WhatsApp to BOTH admin and customer (non-blocking)
+    const orderPayload = {
       order_number, customer_name, customer_phone,
       delivery_address, landmark, payment_method,
       total_amount, items: pricedItems,
-    });
+    };
+
+    notifyAdmin(orderPayload).catch(e => console.error('Admin notify error:', e));
+    notifyCustomer(orderPayload).catch(e => console.error('Customer notify error:', e));
 
     return successResponse(res, { order, order_number }, 'Order placed successfully', 201);
   } catch (err) {
