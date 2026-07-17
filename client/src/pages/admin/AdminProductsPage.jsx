@@ -9,30 +9,26 @@ import { formatPrice } from '@/utils';
 import { PROFIT_PERCENTAGE } from '@/constants';
 import toast from 'react-hot-toast';
 
-const EMPTY_FORM = {
-  name: '', description: '', cost_per_kg: '',
-  category_id: '', is_available: true, is_featured: false
+const EMPTY = {
+  name:'', description:'', cost_per_kg:'',
+  category_id:'', is_available:true, is_featured:false
 };
 
 export default function AdminProductsPage() {
   const { products, loading, setProducts } = useProducts();
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing,   setEditing]   = useState(null);
-  const [form,      setForm]      = useState(EMPTY_FORM);
-  const [saving,    setSaving]    = useState(false);
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [uploading, setUploading] = useState(false);
+  const [open,     setOpen]     = useState(false);
+  const [editing,  setEditing]  = useState(null);
+  const [form,     setForm]     = useState(EMPTY);
+  const [saving,   setSaving]   = useState(false);
+  const [imgFile,  setImgFile]  = useState(null);
+  const [imgPrev,  setImgPrev]  = useState(null);
   const fileRef = useRef();
 
-  const set = (f) => (e) => setForm(p => ({ ...p, [f]: e.target.value }));
+  const f = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
 
   const openAdd = () => {
-    setEditing(null);
-    setForm(EMPTY_FORM);
-    setImageFile(null);
-    setImagePreview(null);
-    setModalOpen(true);
+    setEditing(null); setForm(EMPTY);
+    setImgFile(null); setImgPrev(null); setOpen(true);
   };
 
   const openEdit = (p) => {
@@ -42,78 +38,67 @@ export default function AdminProductsPage() {
       cost_per_kg: p.cost_per_kg, category_id: p.category_id || '',
       is_available: p.is_available, is_featured: p.is_featured
     });
-    setImageFile(null);
-    setImagePreview(p.image_url || null);
-    setModalOpen(true);
+    setImgFile(null);
+    setImgPrev(p.image_url || null);
+    setOpen(true);
   };
 
-  const handleImageChange = (e) => {
+  // Pick image from device — show preview immediately
+  const onPick = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { toast.error('Image must be under 5MB'); return; }
-    setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
+    if (file.size > 8 * 1024 * 1024) { toast.error('Image must be under 8MB'); return; }
+    setImgFile(file);
+    setImgPrev(URL.createObjectURL(file)); // instant local preview
   };
 
-  const removeImage = () => {
-    setImageFile(null);
-    setImagePreview(null);
+  const clearImg = () => {
+    setImgFile(null);
+    setImgPrev(null);
     if (fileRef.current) fileRef.current.value = '';
   };
 
-  // Upload image to Cloudinary directly from frontend
-  const uploadToCloudinary = async (file) => {
-    const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
-    const preset    = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || 'sunday_chicken';
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('upload_preset', preset);
-    fd.append('folder', 'sunday-chicken/products');
-
-    const res  = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
-      method: 'POST', body: fd
-    });
-    const data = await res.json();
-    if (!data.secure_url) throw new Error('Upload failed');
-    return { url: data.secure_url, public_id: data.public_id };
-  };
+  // Convert local file to base64 string — sent to backend which uploads to Cloudinary
+  const toBase64 = (file) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload  = () => res(r.result); // "data:image/jpeg;base64,..."
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
 
   const handleSave = async () => {
-    if (!form.name || !form.cost_per_kg) { toast.error('Name and cost are required'); return; }
+    if (!form.name.trim())   { toast.error('Product name is required'); return; }
+    if (!form.cost_per_kg)   { toast.error('Cost per kg is required');  return; }
     setSaving(true);
     try {
-      let image_url       = editing?.image_url || null;
-      let image_public_id = editing?.image_public_id || null;
+      let payload = { ...form };
 
-      if (imageFile) {
-        setUploading(true);
-        toast.loading('Uploading image…', { id: 'upload' });
-        const uploaded  = await uploadToCloudinary(imageFile);
-        image_url       = uploaded.url;
-        image_public_id = uploaded.public_id;
-        toast.dismiss('upload');
-        setUploading(false);
+      if (imgFile) {
+        // Convert to base64 and let backend upload to Cloudinary
+        toast.loading('Uploading image…', { id: 'img' });
+        payload.image_base64 = await toBase64(imgFile);
+        toast.dismiss('img');
+      } else if (imgPrev === null && editing?.image_url) {
+        // Admin removed existing image
+        payload.remove_image = true;
       }
-
-      const payload = { ...form, image_url, image_public_id };
 
       if (editing) {
         await productService.update(editing.id, payload);
         toast.success('Product updated ✅');
       } else {
         await productService.create(payload);
-        toast.success('Product created ✅');
+        toast.success('Product added ✅');
       }
 
-      setModalOpen(false);
+      setOpen(false);
       const res = await productService.adminGetAll();
       setProducts(res?.data?.products || res?.products || []);
     } catch (err) {
-      toast.dismiss('upload');
-      toast.error(err.message || 'Save failed');
+      toast.dismiss('img');
+      toast.error(err?.message || 'Save failed');
     } finally {
       setSaving(false);
-      setUploading(false);
     }
   };
 
@@ -121,12 +106,12 @@ export default function AdminProductsPage() {
     if (!confirm('Delete this product?')) return;
     try {
       await productService.delete(id);
-      setProducts(p => p.filter(x => x.id !== id));
+      setProducts(ps => ps.filter(p => p.id !== id));
       toast.success('Product deleted');
     } catch { toast.error('Delete failed'); }
   };
 
-  const toggleAvailability = async (product) => {
+  const toggleAvail = async (product) => {
     try {
       await productService.update(product.id, {
         ...product, is_available: !product.is_available
@@ -134,11 +119,11 @@ export default function AdminProductsPage() {
       setProducts(ps => ps.map(p =>
         p.id === product.id ? { ...p, is_available: !p.is_available } : p
       ));
-      toast.success(product.is_available ? 'Marked unavailable' : 'Marked available');
+      toast.success(product.is_available ? 'Hidden from store' : 'Now visible in store');
     } catch { toast.error('Update failed'); }
   };
 
-  const sellingPrice = (cost) =>
+  const sellPrice = (cost) =>
     cost ? formatPrice(Number(cost) * (1 + PROFIT_PERCENTAGE / 100)) : '—';
 
   return (
@@ -152,83 +137,77 @@ export default function AdminProductsPage() {
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-16"><Spinner size="lg" /></div>
+        <div className="flex justify-center py-20"><Spinner size="lg" /></div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
           {products.map((p, i) => (
-            <motion.div
-              key={p.id}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
+            <motion.div key={p.id}
+              initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }}
               transition={{ delay: i * 0.04 }}
-              className="bg-white rounded-2xl shadow-card overflow-hidden border border-gray-100 hover:shadow-card-hover transition-shadow"
+              className="bg-white rounded-2xl shadow-card border border-gray-100 overflow-hidden hover:shadow-card-hover transition-shadow"
             >
-              {/* Image area */}
+              {/* Product Image */}
               <div className="relative bg-gray-50 h-48 overflow-hidden">
                 {p.image_url ? (
-                  <img
-                    src={p.image_url}
-                    alt={p.name}
-                    className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
-                  />
+                  <img src={p.image_url} alt={p.name}
+                    className="w-full h-full object-cover hover:scale-105 transition-transform duration-300" />
                 ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-gray-300">
-                    <ImageIcon size={40} />
-                    <span className="text-xs">No image</span>
+                  <div className="w-full h-full flex flex-col items-center justify-center text-gray-300 gap-2">
+                    <ImageIcon size={36} />
+                    <span className="text-xs">No image — click Edit to add</span>
                   </div>
                 )}
                 {!p.is_available && (
                   <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                    <span className="bg-black/70 text-white text-xs font-semibold px-3 py-1 rounded-full">
-                      Out of Stock
+                    <span className="bg-black/60 text-white text-xs font-semibold px-3 py-1 rounded-full">
+                      Hidden from store
                     </span>
                   </div>
                 )}
                 {p.is_featured && (
-                  <div className="absolute top-2 right-2 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                  <span className="absolute top-2 right-2 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-0.5 rounded-full">
                     ⭐ Featured
-                  </div>
+                  </span>
                 )}
               </div>
 
               <div className="p-4">
-                <h3 className="font-poppins font-semibold text-sm text-accent mb-1 line-clamp-1">
-                  {p.name}
-                </h3>
+                <h3 className="font-semibold text-sm text-accent mb-1 line-clamp-1">{p.name}</h3>
                 {p.description && (
-                  <p className="text-xs text-gray-400 mb-2 line-clamp-2">{p.description}</p>
+                  <p className="text-xs text-gray-400 mb-3 line-clamp-2">{p.description}</p>
                 )}
-                <div className="flex items-center gap-2 mb-3 bg-gray-50 rounded-xl p-2.5">
+
+                {/* Price info */}
+                <div className="flex gap-2 bg-gray-50 rounded-xl p-2.5 mb-3">
                   <div className="flex-1 text-center">
                     <p className="text-[10px] text-gray-400">Cost/kg</p>
                     <p className="text-sm font-bold text-accent">{formatPrice(p.cost_per_kg)}</p>
                   </div>
-                  <div className="w-px h-8 bg-gray-200" />
+                  <div className="w-px bg-gray-200" />
                   <div className="flex-1 text-center">
                     <p className="text-[10px] text-gray-400">Sell/kg</p>
-                    <p className="text-sm font-bold text-green-600">{sellingPrice(p.cost_per_kg)}</p>
+                    <p className="text-sm font-bold text-green-600">{sellPrice(p.cost_per_kg)}</p>
                   </div>
                 </div>
 
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => toggleAvailability(p)}
-                    className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                      p.is_available
+                  <button onClick={() => toggleAvail(p)}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold border transition-all
+                      ${p.is_available
                         ? 'border-green-200 text-green-600 bg-green-50 hover:bg-green-100'
-                        : 'border-gray-200 text-gray-400 hover:border-primary hover:text-primary'
-                    }`}
+                        : 'border-gray-200 text-gray-400 hover:border-primary hover:text-primary'}`}
                   >
-                    {p.is_available ? <><Eye size={12} /> Live</> : <><EyeOff size={12} /> Hidden</>}
+                    {p.is_available
+                      ? <><Eye size={12} /> Live</>
+                      : <><EyeOff size={12} /> Hidden</>
+                    }
                   </button>
-                  <button
-                    onClick={() => openEdit(p)}
-                    className="flex items-center gap-1 px-3 py-2 rounded-xl border border-gray-200 text-gray-500 hover:border-primary hover:text-primary transition-all text-xs font-medium"
+                  <button onClick={() => openEdit(p)}
+                    className="px-3 py-2 rounded-xl border border-gray-200 text-gray-500 hover:border-primary hover:text-primary transition-all text-xs font-medium flex items-center gap-1"
                   >
                     <Edit2 size={12} /> Edit
                   </button>
-                  <button
-                    onClick={() => handleDelete(p.id)}
+                  <button onClick={() => handleDelete(p.id)}
                     className="p-2 rounded-xl border border-gray-200 text-gray-400 hover:border-red-300 hover:text-red-500 transition-all"
                   >
                     <Trash2 size={14} />
@@ -240,59 +219,58 @@ export default function AdminProductsPage() {
         </div>
       )}
 
-      {/* Add/Edit Modal */}
+      {/* ── Add / Edit Modal ── */}
       <Modal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
+        isOpen={open}
+        onClose={() => setOpen(false)}
         title={editing ? `Edit: ${editing.name}` : 'Add New Product'}
         size="lg"
       >
         <div className="space-y-5">
 
-          {/* Image Upload */}
+          {/* Image Upload — pick from device */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">
               Product Image
             </label>
+
+            {/* Hidden file input */}
             <input
               ref={fileRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp"
-              onChange={handleImageChange}
+              accept="image/jpeg,image/png,image/webp,image/jpg"
+              onChange={onPick}
               className="hidden"
-              id="img-upload"
+              id="product-img"
             />
 
-            {imagePreview ? (
-              <div className="relative rounded-2xl overflow-hidden bg-gray-50 h-52">
-                <img
-                  src={imagePreview}
-                  alt="Preview"
-                  className="w-full h-full object-cover"
-                />
-                <button
-                  onClick={removeImage}
+            {imgPrev ? (
+              /* Preview with change/remove buttons */
+              <div className="relative rounded-2xl overflow-hidden h-52 bg-gray-100">
+                <img src={imgPrev} alt="preview" className="w-full h-full object-cover" />
+                {/* Remove button */}
+                <button onClick={clearImg}
                   className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1.5 hover:bg-black/80 transition"
                 >
                   <X size={14} />
                 </button>
-                <label
-                  htmlFor="img-upload"
-                  className="absolute bottom-2 right-2 bg-white text-gray-700 text-xs font-semibold px-3 py-1.5 rounded-xl cursor-pointer hover:bg-gray-100 transition flex items-center gap-1.5 shadow"
+                {/* Change button */}
+                <label htmlFor="product-img"
+                  className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-white text-gray-700 text-xs font-semibold px-4 py-2 rounded-xl cursor-pointer hover:bg-gray-100 shadow-md flex items-center gap-2"
                 >
-                  <Upload size={12} /> Change
+                  <Upload size={13} /> Change Photo
                 </label>
               </div>
             ) : (
-              <label
-                htmlFor="img-upload"
+              /* Upload zone */
+              <label htmlFor="product-img"
                 className="flex flex-col items-center justify-center h-44 rounded-2xl border-2 border-dashed border-gray-200 cursor-pointer hover:border-primary hover:bg-red-50 transition-all group"
               >
-                <Upload size={28} className="text-gray-300 group-hover:text-primary mb-2 transition" />
-                <p className="text-sm font-medium text-gray-400 group-hover:text-primary">
-                  Click to upload image
+                <Upload size={32} className="text-gray-300 group-hover:text-primary mb-3 transition" />
+                <p className="text-sm font-semibold text-gray-500 group-hover:text-primary">
+                  Click to pick photo from your device
                 </p>
-                <p className="text-xs text-gray-300 mt-1">JPG, PNG, WebP · Max 5MB</p>
+                <p className="text-xs text-gray-300 mt-1">JPG, PNG, WebP · Max 8MB</p>
               </label>
             )}
           </div>
@@ -302,70 +280,54 @@ export default function AdminProductsPage() {
             <label className="block text-sm font-semibold text-gray-700 mb-1.5">
               Product Name <span className="text-red-500">*</span>
             </label>
-            <input
-              type="text"
-              value={form.name}
-              onChange={set('name')}
+            <input type="text" value={form.name} onChange={f('name')}
               placeholder="e.g. Fresh Whole Chicken"
-              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition"
-            />
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition" />
           </div>
 
           {/* Description */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1.5">Description</label>
-            <textarea
-              value={form.description}
-              onChange={set('description')}
-              placeholder="Brief product description…"
+            <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+              Description <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <textarea value={form.description} onChange={f('description')}
+              placeholder="Describe the product briefly…"
               rows={2}
-              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition resize-none"
-            />
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 resize-none transition" />
           </div>
 
-          {/* Cost */}
+          {/* Cost per KG */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1.5">
               Cost per KG (₹) <span className="text-red-500">*</span>
             </label>
-            <input
-              type="number"
-              value={form.cost_per_kg}
-              onChange={set('cost_per_kg')}
-              placeholder="250"
-              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition"
-            />
+            <input type="number" value={form.cost_per_kg} onChange={f('cost_per_kg')}
+              placeholder="e.g. 250"
+              className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition" />
             {form.cost_per_kg && (
-              <p className="text-xs text-green-600 mt-1 font-medium">
-                ✅ Customer sees: {sellingPrice(form.cost_per_kg)} /kg (after 10% profit)
+              <p className="text-xs text-green-600 mt-1.5 font-medium bg-green-50 rounded-lg px-3 py-1.5">
+                ✅ Customer sees: {sellPrice(form.cost_per_kg)} /kg (after 10% profit margin)
               </p>
             )}
           </div>
 
-          {/* Checkboxes */}
-          <div className="flex gap-6">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.is_available}
-                onChange={e => setForm(f => ({ ...f, is_available: e.target.checked }))}
-                className="w-4 h-4 accent-red-600"
-              />
-              <span className="text-sm text-gray-700 font-medium">Available</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.is_featured}
-                onChange={e => setForm(f => ({ ...f, is_featured: e.target.checked }))}
-                className="w-4 h-4 accent-red-600"
-              />
-              <span className="text-sm text-gray-700 font-medium">Featured on Home</span>
-            </label>
+          {/* Toggles */}
+          <div className="flex gap-6 pt-1">
+            {[
+              ['is_available', 'Available for sale'],
+              ['is_featured',  'Show on home page'],
+            ].map(([key, label]) => (
+              <label key={key} className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" checked={form[key]}
+                  onChange={e => setForm(p => ({ ...p, [key]: e.target.checked }))}
+                  className="w-4 h-4 accent-red-600 cursor-pointer" />
+                <span className="text-sm text-gray-700 font-medium">{label}</span>
+              </label>
+            ))}
           </div>
 
-          <Button size="full" loading={saving || uploading} onClick={handleSave}>
-            {uploading ? 'Uploading Image…' : saving ? 'Saving…' : editing ? 'Save Changes' : 'Create Product'}
+          <Button size="full" loading={saving} onClick={handleSave}>
+            {saving ? 'Saving…' : editing ? 'Save Changes' : 'Create Product'}
           </Button>
         </div>
       </Modal>
