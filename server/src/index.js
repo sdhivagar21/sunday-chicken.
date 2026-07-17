@@ -20,8 +20,8 @@ app.use(helmet());
 app.use(cors({ origin: '*' }));
 
 // Parsing
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // Logging
 app.use(morgan('dev'));
