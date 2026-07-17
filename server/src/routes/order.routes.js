@@ -5,7 +5,6 @@ const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const { createOrderRules } = require('../validators/order.validator');
 
-// Attach user if logged in, but allow guests too
 const optionalAuth = async (req, res, next) => {
   try {
     const header = req.headers.authorization;
@@ -18,11 +17,10 @@ const optionalAuth = async (req, res, next) => {
       [decoded.id]
     );
     if (rows[0]) req.user = rows[0];
-  } catch { /* invalid token — treat as guest */ }
+  } catch { }
   next();
 };
 
-// No login required to place order
 router.post('/',   optionalAuth, createOrderRules, validate, ctrl.createOrder);
 router.get('/my',  authenticate, ctrl.getMyOrders);
 router.get('/:id', optionalAuth, ctrl.getById);
