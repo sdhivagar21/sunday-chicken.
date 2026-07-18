@@ -20,7 +20,7 @@ const optionalAuth = async (req, res, next) => {
   } catch { }
   next();
 };
-
+   
 router.post('/',   optionalAuth, createOrderRules, validate, ctrl.createOrder);
 router.get('/my',  authenticate, ctrl.getMyOrders);
 router.get('/:id', optionalAuth, ctrl.getById);
