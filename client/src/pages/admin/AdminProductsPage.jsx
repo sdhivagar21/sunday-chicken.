@@ -1,9 +1,8 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Edit2, Trash2, Eye, EyeOff, Upload, X, ImageIcon } from 'lucide-react';
 import { AdminLayout } from '@/components/layout';
 import { Button, Spinner } from '@/components/ui';
-import { useProducts } from '@/hooks/useProducts';
 import { productService } from '@/services/product.service';
 import { formatPrice } from '@/utils';
 import { PROFIT_PERCENTAGE } from '@/constants';
@@ -15,14 +14,31 @@ const EMPTY = {
 };
 
 export default function AdminProductsPage() {
-  const { products, loading, setProducts } = useProducts();
-  const [open,    setOpen]    = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [form,    setForm]    = useState(EMPTY);
-  const [saving,  setSaving]  = useState(false);
-  const [imgFile, setImgFile] = useState(null);
-  const [imgPrev, setImgPrev] = useState(null);
+  // Use adminGetAll directly — not useProducts hook which calls public endpoint
+  const [products, setProducts] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [open,     setOpen]     = useState(false);
+  const [editing,  setEditing]  = useState(null);
+  const [form,     setForm]     = useState(EMPTY);
+  const [saving,   setSaving]   = useState(false);
+  const [imgFile,  setImgFile]  = useState(null);
+  const [imgPrev,  setImgPrev]  = useState(null);
   const fileRef = useRef();
+
+  // Load ALL products including hidden ones (admin endpoint)
+  const loadProducts = async () => {
+    try {
+      setLoading(true);
+      const res = await productService.adminGetAll();
+      setProducts(res?.data?.products || res?.products || []);
+    } catch (err) {
+      toast.error('Failed to load products');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadProducts(); }, []);
 
   const f = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
 
@@ -84,8 +100,7 @@ export default function AdminProductsPage() {
         toast.success('Product added ✅');
       }
       setOpen(false);
-      const res = await productService.adminGetAll();
-      setProducts(res?.data?.products || res?.products || []);
+      await loadProducts();
     } catch (err) {
       toast.dismiss('img');
       toast.error(err?.message || 'Save failed');
@@ -137,7 +152,7 @@ export default function AdminProductsPage() {
                   <img src={p.image_url} alt={p.name} className="w-full h-full object-cover hover:scale-105 transition-transform duration-300" />
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center text-gray-300 gap-2">
-                    <ImageIcon size={36} /><span className="text-xs">No image</span>
+                    <ImageIcon size={36} /><span className="text-xs">No image — click Edit to add</span>
                   </div>
                 )}
                 {!p.is_available && (
@@ -187,68 +202,57 @@ export default function AdminProductsPage() {
         </div>
       )}
 
-      {/* ── CUSTOM DRAWER — replaces Modal completely ── */}
+      {/* ── SIDE DRAWER (no Modal component needed) ── */}
       <AnimatePresence>
         {open && (
           <>
-            {/* Backdrop */}
             <motion.div
               className="fixed inset-0 bg-black/50 z-40"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
               onClick={() => setOpen(false)}
             />
-
-            {/* Drawer from right */}
             <motion.div
               className="fixed right-0 top-0 h-full w-full max-w-lg bg-white z-50 flex flex-col shadow-2xl"
-              initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+              initial={{ x:'100%' }} animate={{ x:0 }} exit={{ x:'100%' }}
+              transition={{ type:'spring', damping:30, stiffness:300 }}
             >
               {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
                 <h2 className="font-poppins font-bold text-lg text-accent">
                   {editing ? `Edit: ${editing.name}` : 'Add New Product'}
                 </h2>
-                <button onClick={() => setOpen(false)}
-                  className="p-2 rounded-xl hover:bg-gray-100 transition text-gray-400"
-                >
-                  <X size={20} />
+                <button onClick={() => setOpen(false)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-400">
+                  <X size={20}/>
                 </button>
               </div>
 
-              {/* Scrollable content */}
+              {/* Scrollable form */}
               <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
 
-                {/* ── IMAGE UPLOAD ── */}
+                {/* IMAGE UPLOAD */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Product Image
+                    📸 Product Image
                   </label>
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={onPick}
-                    className="hidden"
-                    id="prod-img"
-                  />
+                  <input ref={fileRef} type="file" accept="image/*"
+                    onChange={onPick} className="hidden" id="prod-img" />
+
                   {imgPrev ? (
                     <div className="relative rounded-2xl overflow-hidden h-52 bg-gray-100">
                       <img src={imgPrev} alt="preview" className="w-full h-full object-cover" />
                       <button onClick={clearImg}
-                        className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1.5">
-                        <X size={14} />
+                        className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1.5 hover:bg-red-600 transition">
+                        <X size={14}/>
                       </button>
                       <label htmlFor="prod-img"
-                        className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-white text-gray-700 text-xs font-semibold px-4 py-2 rounded-xl cursor-pointer shadow flex items-center gap-2">
-                        <Upload size={13} /> Change Photo
+                        className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-white text-gray-700 text-xs font-semibold px-4 py-2 rounded-xl cursor-pointer hover:bg-gray-100 shadow flex items-center gap-2">
+                        <Upload size={13}/> Change Photo
                       </label>
                     </div>
                   ) : (
                     <label htmlFor="prod-img"
-                      className="flex flex-col items-center justify-center h-44 rounded-2xl border-2 border-dashed border-gray-300 cursor-pointer hover:border-primary hover:bg-red-50 transition-all group"
-                    >
-                      <Upload size={32} className="text-gray-300 group-hover:text-primary mb-3" />
+                      className="flex flex-col items-center justify-center h-44 rounded-2xl border-2 border-dashed border-gray-300 cursor-pointer hover:border-primary hover:bg-red-50 transition-all group">
+                      <Upload size={36} className="text-gray-300 group-hover:text-primary mb-3 transition"/>
                       <p className="text-sm font-semibold text-gray-500 group-hover:text-primary">
                         Click to pick photo from your device
                       </p>
@@ -257,14 +261,14 @@ export default function AdminProductsPage() {
                   )}
                 </div>
 
-                {/* Name */}
+                {/* Product Name */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">
                     Product Name <span className="text-red-500">*</span>
                   </label>
                   <input type="text" value={form.name} onChange={f('name')}
                     placeholder="e.g. Fresh Whole Chicken"
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition" />
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition"/>
                 </div>
 
                 {/* Description */}
@@ -273,18 +277,18 @@ export default function AdminProductsPage() {
                     Description <span className="text-gray-400 font-normal">(optional)</span>
                   </label>
                   <textarea value={form.description} onChange={f('description')}
-                    placeholder="Describe the product…" rows={2}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 resize-none transition" />
+                    placeholder="Describe the product briefly…" rows={2}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 resize-none transition"/>
                 </div>
 
-                {/* Cost */}
+                {/* Cost per KG */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">
                     Cost per KG (₹) <span className="text-red-500">*</span>
                   </label>
                   <input type="number" value={form.cost_per_kg} onChange={f('cost_per_kg')}
                     placeholder="e.g. 250"
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition" />
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-red-100 transition"/>
                   {form.cost_per_kg && (
                     <p className="text-xs text-green-600 mt-1.5 bg-green-50 rounded-lg px-3 py-1.5 font-medium">
                       ✅ Customer sees: {sellPrice(form.cost_per_kg)} /kg (after 10% profit)
@@ -294,19 +298,19 @@ export default function AdminProductsPage() {
 
                 {/* Toggles */}
                 <div className="flex gap-6">
-                  {[['is_available','Available for sale'],['is_featured','Show on home page']].map(([key, label]) => (
+                  {[['is_available','Available for sale'],['is_featured','Show on home page']].map(([key,label]) => (
                     <label key={key} className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={form[key]}
-                        onChange={e => setForm(p => ({ ...p, [key]: e.target.checked }))}
-                        className="w-4 h-4 accent-red-600" />
+                        onChange={e => setForm(p => ({...p,[key]:e.target.checked}))}
+                        className="w-4 h-4 accent-red-600"/>
                       <span className="text-sm text-gray-700 font-medium">{label}</span>
                     </label>
                   ))}
                 </div>
               </div>
 
-              {/* Footer Save button */}
-              <div className="px-6 py-4 border-t border-gray-100">
+              {/* Save button */}
+              <div className="px-6 py-4 border-t border-gray-100 flex-shrink-0">
                 <Button size="full" loading={saving} onClick={handleSave}>
                   {saving ? 'Saving…' : editing ? 'Save Changes' : 'Create Product'}
                 </Button>
